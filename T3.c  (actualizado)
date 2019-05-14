@@ -1,0 +1,176 @@
+#include<mpi.h>
+#include<stdio.h>
+#include<stdlib.h>
+#include<math.h>
+#include <string.h>
+#define T 100000 //tamaño del vector original
+
+int Random(){	//función que devuelve número aleatoreo entre 0 y 100
+
+	int numero = rand()%100;
+	return numero;
+}
+
+int* CrearVector(int inicio, int final, int* origen){
+
+    int* sub_vector, tam, auxiliar=0, i; //inicializo puntero y variables
+    tam=final-inicio;
+    sub_vector=(int*)malloc(tam* sizeof(int)); //le da un espacio de memoria necesario (dinámico)
+	    for(i=inicio;i<final;i++){ //recorrer arreglo original
+		*(sub_vector+auxiliar)=*(origen+i);
+		auxiliar+=1;
+	    }
+    return  sub_vector; //retorno subvector
+}
+
+void imprimir(int id_proceso, int tam_subvector, int* sub_vector){
+
+    int i;
+    printf("\nEl proceso %d crea el sub_vector: [ ", id_proceso);
+	    for (i=0;i<tam_subvector;++i){ //tam_subvector-->tamaño de cada subvector
+		printf("%d, ", *(sub_vector+i));
+	    }
+    printf("]\n");
+
+}
+
+float promedio(int* v,int tam_sv){ //ingresan como parametros el subvector y el tamaño de cada uno (tam_sv)
+
+	float prom=0,suma=0;
+		for(int i=0; i<tam_sv; i++){
+			suma=suma+*(v+i);
+		}	
+	prom=suma/tam_sv;
+	return prom;
+}
+
+/*VARIANZA: se subdividira en una parte paralela y una secuencial, la paralela será (elemento-promedio general)**2 y la secuencial la division de toda esta sumatoria por el total de datos */
+
+double diferencia_al_cuadrado(int* s_vector,int promedio_general, int tam_vector){
+
+	float diferencia=0;
+	double sumatoria=0;
+
+	for(int i=0;i<tam_vector;i++){
+		diferencia=*(s_vector+i)-tam_vector;
+		sumatoria=sumatoria+(diferencia*diferencia);	
+	}
+
+	return sumatoria;
+}
+
+
+float desviacion(float vari){
+	//printf("\n La DESVIACION ESTANDAR de los valores es %f", sqrt(vari));
+	return (float) sqrt(vari);
+}
+
+
+int main(void){
+
+	/*VARIABLES PROCESOS*/
+	int tam_procesos; //¿cuantos procesos hay? ---> tam_procesos
+	int id_proceso; // identificador de proceso 
+        int vector[T];
+        int* sub_vector=NULL;
+	int tam_subvector;
+
+	/*VERIABLES PROMEDIO*/
+	float promedio_proceso=0,promedio_final=0;
+
+	/*VARIABLES VARIANZA*/
+	double suma_diferencias=0;
+	double suma_varianza=0;
+	float varianza=0;
+
+	/*VARIABLES DESVIACIÓN*/
+	float desv=0;
+
+    	/*INICIO USO DE MPI*/
+    	MPI_Init(NULL, NULL);
+    	MPI_Comm_size(MPI_COMM_WORLD, &tam_procesos);
+	MPI_Comm_rank(MPI_COMM_WORLD, &id_proceso);    
+    	tam_subvector = T/tam_procesos; //en cuanto divido cada subvector
+
+	/*LLENAR VECTOR ALEATORIO*/	
+	for(int i=0;i<T;i++){
+		vector[i]=Random();
+	}
+
+	    if (id_proceso!=0) {
+
+		/*PROCESOS DISTINTOS DE 0*/
+
+		sub_vector=(int*)malloc(tam_subvector * sizeof(int)); //creo subvector dinámico
+		MPI_Recv(sub_vector,tam_subvector,MPI_INT,0,0,MPI_COMM_WORLD,MPI_STATUS_IGNORE); //recibo datos del subvector para calcular el promedio
+		//imprimir(id_proceso,tam_subvector,sub_vector);
+
+		promedio_proceso=promedio(sub_vector,tam_subvector);
+		//printf("El PROMEDIO del subvector del proceso %d es: %.2f\n",id_proceso,promedio_proceso);
+
+		MPI_Send(&promedio_proceso,2,MPI_FLOAT,0,0,MPI_COMM_WORLD); //envío promedio del proceso devuelta al proceso cero
+		MPI_Recv(&promedio_final,2,MPI_FLOAT,0,0,MPI_COMM_WORLD,MPI_STATUS_IGNORE); //recibo de vuelta el promedio general 
+		
+		suma_diferencias=diferencia_al_cuadrado(sub_vector,promedio_final,tam_subvector); //aplico sumatoria de diferencias a los procesos
+		
+        	//printf("La SUMATORIA de DIFERENCIAS del proceso %d es : %.2f\n",id_proceso, suma_diferencias);
+		MPI_Send(&suma_diferencias,2,MPI_FLOAT,0,0,MPI_COMM_WORLD); //envío sumatorias al proceso 0
+
+	    } else {
+
+		/*DIVISION SUBVECTOR*/
+
+		printf("\nSe solicita la ejecución con %d procesos\n", tam_procesos);
+		printf("Proceso %d calcula tamaño de cada vector = %d\n\n", id_proceso, tam_subvector);
+
+		for (int i=1;i<tam_procesos;i++) {
+		    sub_vector=CrearVector(i*tam_subvector,(i*tam_subvector)+tam_subvector,vector);
+		    MPI_Send(sub_vector,tam_subvector,MPI_INT,i,0,MPI_COMM_WORLD); //envío valores a demas procesos distintos de cero
+		}
+
+		sub_vector=CrearVector(0,tam_subvector,vector); //se crea a si mismo el subvector para tener la division en todos lados (procesador 0)
+		//imprimir(id_proceso,tam_subvector,sub_vector);	
+
+		/*PROMEDIO*/
+
+		for(int i=1; i<tam_procesos; i++){
+			MPI_Recv(&promedio_proceso,2,MPI_FLOAT,i,0,MPI_COMM_WORLD,MPI_STATUS_IGNORE); //recibo los subvectores y calculo los promedios
+			promedio_final=promedio_final+promedio_proceso;
+		}
+		
+		promedio_proceso=promedio(sub_vector,tam_subvector); //promedio del proceso 0 (inicial)
+		//printf("El PROMEDIO del subvector del proceso %d es: %.2f\n",id_proceso,promedio_proceso);
+
+		promedio_final=promedio_final+promedio_proceso; //obtengo el promedio final
+		printf("El PROMEDIO FINAL (ubicado en el proceso %d) es: %.2f\n",id_proceso,promedio_final);
+
+		/*VARIANZA*/
+
+		for(int i=1; i<tam_procesos; i++){
+			MPI_Send(&promedio_final,2,MPI_FLOAT,i,0,MPI_COMM_WORLD); //renvío promedio general a los demás procesos
+		}
+		
+		for(int i=1; i<tam_procesos; i++){
+			MPI_Recv(&suma_diferencias,2,MPI_FLOAT,i,0,MPI_COMM_WORLD,MPI_STATUS_IGNORE); //recibo sumatorias al cuadrado de los demás procesos distintos de cero
+			suma_varianza=(suma_varianza+suma_diferencias)/2; //contador de datos que llegan de los procesos
+		}
+	
+		suma_diferencias=diferencia_al_cuadrado(sub_vector,promedio_final,tam_subvector); //obtengo suma de diferencias al cuadrado del proceso cero
+
+		//printf("La SUMATORIA de DIFERENCIAS del proceso %d es : %.2f\n",id_proceso, suma_diferencias);
+
+		varianza=suma_varianza+suma_diferencias;
+		printf("La VARIANZA total (ubicada en el proceso %d) es : %.2f\n",id_proceso,varianza);
+
+		desv=desviacion(varianza);
+		printf("La DESVIACION ESTANDAR (ubicada en el proceso %d) es : %.2f\n",id_proceso,desv);
+
+	    }
+
+	/*FINALIZO USO DE MPI*/
+	MPI_Finalize();
+	
+    return 0;
+
+}
+
